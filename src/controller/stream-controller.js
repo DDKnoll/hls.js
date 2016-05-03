@@ -169,7 +169,7 @@ class StreamController extends EventHandler {
             bufferEnd = bufferInfo.end,
             fragPrevious = this.fragPrevious,
             maxBufLen;
-        if(config.bufferRangeFromVideo) {
+        if(!config.bufferRangeFromVideo) {
             bufferEnd = Math.max.apply(this.bufferRange, this.bufferRange.map((range) => range.end));
         }
         // compute max Buffer Length that we could get from this load level, based on level bitrate. don't buffer more than 60 MB and more than 30s
