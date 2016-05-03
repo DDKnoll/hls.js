@@ -53,6 +53,7 @@ class Hls {
           maxBufferSize: 60 * 1000 * 1000,
           maxBufferHole: 0.5,
           maxSeekHole: 2,
+          bufferRangeFromVideo: true,
           seekHoleNudgeDuration : 0.01,
           stalledInBufferedNudgeThreshold: 10,
           maxFragLookUpTolerance : 0.2,
@@ -156,7 +157,7 @@ class Hls {
     this.fpsController.destroy();
     this.streamController.destroy();
     this.timelineController.destroy();
-    this.keyLoader.destroy();  
+    this.keyLoader.destroy();
     this.url = null;
     this.observer.removeAllListeners();
   }
