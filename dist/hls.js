@@ -1816,7 +1816,7 @@ var StreamController = function (_EventHandler) {
               bufferEnd = bufferInfo.end,
               fragPrevious = this.fragPrevious,
               maxBufLen;
-          if (config.bufferRangeFromVideo) {
+          if (!config.bufferRangeFromVideo) {
             bufferEnd = Math.max.apply(this.bufferRange, this.bufferRange.map(function (range) {
               return range.end;
             }));
