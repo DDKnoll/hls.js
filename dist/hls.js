@@ -1820,6 +1820,7 @@ var StreamController = function (_EventHandler) {
             bufferEnd = Math.max.apply(this.bufferRange, this.bufferRange.map(function (range) {
               return range.end;
             }));
+            console.log('bufferEnd from bufferRange: ' + bufferEnd);
           }
           // compute max Buffer Length that we could get from this load level, based on level bitrate. don't buffer more than 60 MB and more than 30s
           if (this.levels[level].hasOwnProperty('bitrate')) {
@@ -3594,6 +3595,24 @@ var ADTS = function () {
   }
 
   _createClass(ADTS, null, [{
+    key: 'getSilentFrame',
+    value: function getSilentFrame(channelCount) {
+      if (channelCount === 1) {
+        return new Uint8Array([0x00, 0xc8, 0x00, 0x80, 0x23, 0x80]);
+      } else if (channelCount === 2) {
+        return new Uint8Array([0x21, 0x00, 0x49, 0x90, 0x02, 0x19, 0x00, 0x23, 0x80]);
+      } else if (channelCount === 3) {
+        return new Uint8Array([0x00, 0xc8, 0x00, 0x80, 0x20, 0x84, 0x01, 0x26, 0x40, 0x08, 0x64, 0x00, 0x8e]);
+      } else if (channelCount === 4) {
+        return new Uint8Array([0x00, 0xc8, 0x00, 0x80, 0x20, 0x84, 0x01, 0x26, 0x40, 0x08, 0x64, 0x00, 0x80, 0x2c, 0x80, 0x08, 0x02, 0x38]);
+      } else if (channelCount === 5) {
+        return new Uint8Array([0x00, 0xc8, 0x00, 0x80, 0x20, 0x84, 0x01, 0x26, 0x40, 0x08, 0x64, 0x00, 0x82, 0x30, 0x04, 0x99, 0x00, 0x21, 0x90, 0x02, 0x38]);
+      } else if (channelCount === 6) {
+        return new Uint8Array([0x00, 0xc8, 0x00, 0x80, 0x20, 0x84, 0x01, 0x26, 0x40, 0x08, 0x64, 0x00, 0x82, 0x30, 0x04, 0x99, 0x00, 0x21, 0x90, 0x02, 0x00, 0xb2, 0x00, 0x20, 0x08, 0xe0]);
+      }
+      return null;
+    }
+  }, {
     key: 'getAudioConfig',
     value: function getAudioConfig(observer, data, offset, audioCodec) {
       var adtsObjectType,
@@ -5968,6 +5987,7 @@ var Hls = function () {
     if (config.liveMaxLatencyDuration !== undefined && (config.liveMaxLatencyDuration <= config.liveSyncDuration || config.liveSyncDuration === undefined)) {
       throw new Error('Illegal hls.js config: "liveMaxLatencyDuration" must be gt "liveSyncDuration"');
     }
+    console.log(config);
 
     (0, _logger.enableLogs)(config.debug);
     this.config = config;
@@ -7289,6 +7309,10 @@ var _createClass = function () { function defineProperties(target, props) { for 
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       * fMP4 remuxer
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      */
 
+var _adts = require('../demux/adts');
+
+var _adts2 = _interopRequireDefault(_adts);
+
 var _events = require('../events');
 
 var _events2 = _interopRequireDefault(_events);
@@ -7628,6 +7652,38 @@ var MP4Remuxer = function () {
       });
       samples0 = track.samples;
 
+      // If the audio track is missing samples, the frames seem to get "left-shifted" within the
+      // resulting mp4 segment, causing sync issues and leaving gaps at the end of the audio segment.
+      // In an effort to prevent this from happening, we inject frames here where there are gaps.
+      // When possible, we inject a silent frame; when that's not possible, we duplicate the last
+      // frame.
+      for (var i = 0; i < samples0.length - 1; i++) {
+        var sample0 = samples0[i],
+            sample1 = samples0[i + 1],
+            pts0 = sample0.pts - this._initDTS,
+            pts1 = sample1.pts - this._initDTS,
+            nextAacPts = contiguous ? this.nextAacPts : timeOffset * pesTimeScale,
+            ptsnorm0 = this._PTSNormalize(pts0, nextAacPts),
+            ptsnorm1 = this._PTSNormalize(pts1, nextAacPts),
+            missing = Math.round((ptsnorm1 - ptsnorm0) / pes2mp4ScaleFactor / 1024.0) - 1;
+        if (missing > 0) {
+          _logger.logger.log('Injecting ' + missing + ' packets of missing audio.');
+          for (var j = 0; j < missing; j++) {
+            var newStamp = Math.round(sample0.pts + (j + 1) * 1024 * pes2mp4ScaleFactor),
+                fillFrame = _adts2.default.getSilentFrame(track.channelCount),
+                newAacSample;
+            if (!fillFrame) {
+              _logger.logger.log('Unable to get silent frame for given audio codec; duplicating last frame instead.');
+              fillFrame = sample0.unit.slice(0);
+            }
+            newAacSample = { unit: fillFrame, pts: newStamp, dts: newStamp };
+            samples0.splice(i + 1, 0, newAacSample);
+            i += 1;
+            track.len += newAacSample.unit.length;
+          }
+        }
+      }
+
       while (samples0.length) {
         aacSample = samples0.shift();
         unit = aacSample.unit;
@@ -7649,16 +7705,16 @@ var MP4Remuxer = function () {
           mp4Sample.duration = expectedSampleDuration;
           dtsnorm = expectedSampleDuration * pes2mp4ScaleFactor + lastDTS;
         } else {
-          var nextAacPts = void 0,
+          var _nextAacPts = void 0,
               delta = void 0;
           if (contiguous) {
-            nextAacPts = this.nextAacPts;
+            _nextAacPts = this.nextAacPts;
           } else {
-            nextAacPts = timeOffset * pesTimeScale;
+            _nextAacPts = timeOffset * pesTimeScale;
           }
-          ptsnorm = this._PTSNormalize(pts, nextAacPts);
-          dtsnorm = this._PTSNormalize(dts, nextAacPts);
-          delta = Math.round(1000 * (ptsnorm - nextAacPts) / pesTimeScale);
+          ptsnorm = this._PTSNormalize(pts, _nextAacPts);
+          dtsnorm = this._PTSNormalize(dts, _nextAacPts);
+          delta = Math.round(1000 * (ptsnorm - _nextAacPts) / pesTimeScale);
           // if fragment are contiguous, detect hole/overlapping between fragments
           if (contiguous) {
             // log delta
@@ -7673,7 +7729,7 @@ var MP4Remuxer = function () {
                   continue;
                 }
               // set PTS/DTS to expected PTS/DTS
-              ptsnorm = dtsnorm = nextAacPts;
+              ptsnorm = dtsnorm = _nextAacPts;
             }
           }
           // remember first PTS of our aacSamples, ensure value is positive
@@ -7817,7 +7873,7 @@ var MP4Remuxer = function () {
 
 exports.default = MP4Remuxer;
 
-},{"../errors":21,"../events":23,"../remux/mp4-generator":31,"../utils/logger":37}],33:[function(require,module,exports){
+},{"../demux/adts":14,"../errors":21,"../events":23,"../remux/mp4-generator":31,"../utils/logger":37}],33:[function(require,module,exports){
 'use strict';
 
 Object.defineProperty(exports, "__esModule", {
